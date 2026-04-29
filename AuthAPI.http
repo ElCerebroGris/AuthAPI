@@ -1,6 +1,35 @@
-@AuthAPI_HostAddress = http://localhost:5099
+@AuthAPI_HostAddress = https://localhost:7186
 
 GET {{AuthAPI_HostAddress}}/weatherforecast/
 Accept: application/json
+
+###
+
+POST {{AuthAPI_HostAddress}}/todoitems
+Content-Type: application/json
+
+{
+  "name":"walk dog",
+  "isComplete":true
+}
+###
+
+GET {{AuthAPI_HostAddress}}/todoitems
+
+###
+
+GET {{AuthAPI_HostAddress}}/todoitems/complete
+
+###
+
+DELETE {{AuthAPI_HostAddress}}/todoitems/{id}
+
+###
+
+GET {{AuthAPI_HostAddress}}/todoitems/{id}
+
+###
+
+PUT {{AuthAPI_HostAddress}}/todoitems/{id}
 
 ###
