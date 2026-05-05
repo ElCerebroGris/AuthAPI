@@ -1,10 +1,44 @@
 using AuthAPI;
 using AuthAPI.Entities;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+
+builder.Services.AddCors();
+
+// Add Authentication
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = IdentityConstants.BearerScheme;
+    options.DefaultChallengeScheme = IdentityConstants.BearerScheme;
+})
+.AddJwtBearer(IdentityConstants.BearerScheme, options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Secret"]!))
+    };
+});
+builder.Services.AddAuthorization();
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new ()
+    {
+        Title = "BayQi Authentication API",
+        Version = "v1"
+    });
+});
 
 builder.Services.AddDbContext<AppDbContext>(opt => opt.UseInMemoryDatabase("TodoList"));
 //builder.Services.AddDatabaseDeveloperPageExceptionFilter();
@@ -12,17 +46,35 @@ builder.Services.AddDbContext<AppDbContext>(opt => opt.UseInMemoryDatabase("Todo
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-
+app.UseCors(builder => builder
+    .AllowAnyOrigin()
+    .AllowAnyMethod()
+    .AllowAnyHeader());
 app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseSwagger();
+app.UseSwaggerUI();
 
-var todoItems = app.MapGroup("/todoitems");
+var authItens = app.MapGroup("/auth");
 
-todoItems.MapGet("/", GetAllTodos);
-todoItems.MapGet("/complete", GetCompleteTodos);
-todoItems.MapGet("/{id}", GetTodo);
-todoItems.MapPost("/", CreateTodo);
-todoItems.MapPut("/{id}", UpdateTodo);
-todoItems.MapDelete("/{id}", DeleteTodo);
+authItens.MapPost("/login", CreateTodo);
+authItens.MapPost("/logout", CreateTodo).RequireAuthorization();
+authItens.MapPost("/register", CreateTodo);
+authItens.MapGet("/me", GetAllTodos).RequireAuthorization();
+authItens.MapPut("/update", CreateTodo).RequireAuthorization();
+authItens.MapGet("/exists", GetAllTodos).RequireAuthorization();
+authItens.MapPost("/password-reset-with-otp", CreateTodo);
+authItens.MapPost("/password-reset-with-email", CreateTodo);
+authItens.MapPost("/password-reset-with-token", CreateTodo);
+
+//var todoItems = app.MapGroup("/todoitems");
+//todoItems.MapGet("/", GetAllTodos);
+//todoItems.MapGet("/complete", GetCompleteTodos).RequireAuthorization();
+//todoItems.MapGet("/{id}", GetTodo);
+//todoItems.MapPost("/", CreateTodo);
+//todoItems.MapPut("/{id}", UpdateTodo);
+//todoItems.MapDelete("/{id}", DeleteTodo);
 
 app.Run();
 
