@@ -1,5 +1,7 @@
 using AuthAPI;
+using AuthAPI.DTOs;
 using AuthAPI.Entities;
+using AuthAPI.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -40,8 +42,15 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+builder.Services.Configure<SupabaseSettings>(
+    builder.Configuration.GetSection("Supabase"));
+
 builder.Services.AddDbContext<AppDbContext>(opt => opt.UseInMemoryDatabase("TodoList"));
-//builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+
+builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IPhoneOtpService, PhoneOtpService>();
+builder.Services.AddScoped<IEmailOtpService, EmailOtpService>();
+builder.Services.AddSingleton<SupabaseImageStorageService>();
 
 var app = builder.Build();
 
@@ -58,9 +67,10 @@ app.UseSwaggerUI();
 
 var authItens = app.MapGroup("/auth");
 
+authItens.MapPost("/register", Register);
+
 authItens.MapPost("/login", CreateTodo);
 authItens.MapPost("/logout", CreateTodo).RequireAuthorization();
-authItens.MapPost("/register", CreateTodo);
 authItens.MapGet("/me", GetAllTodos).RequireAuthorization();
 authItens.MapPut("/update", CreateTodo).RequireAuthorization();
 authItens.MapGet("/exists", GetAllTodos).RequireAuthorization();
@@ -68,15 +78,52 @@ authItens.MapPost("/password-reset-with-otp", CreateTodo);
 authItens.MapPost("/password-reset-with-email", CreateTodo);
 authItens.MapPost("/password-reset-with-token", CreateTodo);
 
-//var todoItems = app.MapGroup("/todoitems");
-//todoItems.MapGet("/", GetAllTodos);
-//todoItems.MapGet("/complete", GetCompleteTodos).RequireAuthorization();
-//todoItems.MapGet("/{id}", GetTodo);
-//todoItems.MapPost("/", CreateTodo);
-//todoItems.MapPut("/{id}", UpdateTodo);
-//todoItems.MapDelete("/{id}", DeleteTodo);
-
 app.Run();
+
+static async Task<IResult> Register(RegisterCustomerUserRequest request, IUserService userService, 
+    SupabaseImageStorageService _imageStorage)
+{
+    try
+    {
+        if (request.ProfileFile != null)
+        {
+            var uploadResult = await _imageStorage.UploadImageBytesAsync(request.ProfileFile, "UserPhoto");
+
+            if (!uploadResult.IsSuccess)
+                return TypedResults.BadRequest(uploadResult.ErrorMessage);
+
+            request.Profile = uploadResult.PublicUrl!;
+        }
+
+        if (request.DiFrontalImageFile != null)
+        {
+            var uploadResult = await _imageStorage.UploadImageBytesAsync(request.DiFrontalImageFile, "UserPhoto");
+
+            if (!uploadResult.IsSuccess)
+                return TypedResults.BadRequest(uploadResult.ErrorMessage);
+
+            request.DiFrontalImage = uploadResult.PublicUrl!;
+        }
+
+        if (request.DiBackImageFile != null)
+        {
+            var uploadResult = await _imageStorage.UploadImageBytesAsync(request.DiBackImageFile, "UserPhoto");
+
+            if (!uploadResult.IsSuccess)
+                return TypedResults.BadRequest(uploadResult.ErrorMessage);
+
+            request.DiBackImage = uploadResult.PublicUrl!;
+        }
+
+        var user = await userService.RegisterCustomerUserAsync(request);
+
+        return TypedResults.Ok(user);
+    }
+    catch (Exception ex)
+    {
+        return TypedResults.BadRequest(new { message = ex.Message });
+    }
+}
 
 static async Task<IResult> GetAllTodos(AppDbContext db)
 {
