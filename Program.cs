@@ -3,8 +3,11 @@ using AuthAPI.DTOs;
 using AuthAPI.Entities;
 using AuthAPI.Services;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Supabase.Gotrue;
+using System.Diagnostics;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -68,15 +71,11 @@ app.UseSwaggerUI();
 var authItens = app.MapGroup("/auth");
 
 authItens.MapPost("/register", Register);
+authItens.MapPost("/login", Login);
+authItens.MapPost("/login-bi", LoginWithBi);
+authItens.MapPost("/register-bi", RegisterWithBi);
 
-authItens.MapPost("/login", CreateTodo);
-authItens.MapPost("/logout", CreateTodo).RequireAuthorization();
 authItens.MapGet("/me", GetAllTodos).RequireAuthorization();
-authItens.MapPut("/update", CreateTodo).RequireAuthorization();
-authItens.MapGet("/exists", GetAllTodos).RequireAuthorization();
-authItens.MapPost("/password-reset-with-otp", CreateTodo);
-authItens.MapPost("/password-reset-with-email", CreateTodo);
-authItens.MapPost("/password-reset-with-token", CreateTodo);
 
 app.Run();
 
@@ -125,54 +124,101 @@ static async Task<IResult> Register(RegisterCustomerUserRequest request, IUserSe
     }
 }
 
+static async Task<IResult> Login(LoginRequest request, IUserService userService)
+{
+    try
+    {
+        var result = await userService.LoginCustomerUserAsync(request.PhoneNumber, request.Password);
+
+        return TypedResults.Ok(result);
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return TypedResults.Unauthorized();
+    }
+    catch (Exception ex)
+    {
+        return TypedResults.BadRequest(new { message = ex.Message });
+    }
+}
+
+static async Task<IResult> LoginWithBi(LoginByBIRequest request, IUserService userService)
+{
+    var stopwatch = Stopwatch.StartNew();
+    try
+    {
+        var result = await userService.LoginCustomerUserByBiAsync(request.BiNumber, request.Password);
+
+        return TypedResults.Ok(result);
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return TypedResults.Unauthorized();
+    }
+    catch (Exception ex)
+    {
+        return TypedResults.BadRequest(new { message = ex.Message });
+    }
+}
+
+static async Task<IResult> RegisterWithBi([FromForm] RegisterCustomerByBIRequest request, IUserService userService,
+    SupabaseImageStorageService _imageStorage)
+{
+    try
+    {
+        var registerRequest = request.ToRegisterCustomerUserDTO();
+
+        if (registerRequest.ProfileFile != null)
+        {
+            var uploadResult = await _imageStorage.UploadImageBytesAsync(registerRequest.ProfileFile, "UserPhoto");
+
+            if (!uploadResult.IsSuccess)
+                return TypedResults.BadRequest(uploadResult.ErrorMessage);
+
+            registerRequest.Profile = uploadResult.PublicUrl!;
+        }
+
+        if (registerRequest.DiFrontalImageFile != null)
+        {
+            var uploadResult = await _imageStorage.UploadImageBytesAsync(registerRequest.DiFrontalImageFile, "UserPhoto");
+
+            if (!uploadResult.IsSuccess)
+                return TypedResults.BadRequest(uploadResult.ErrorMessage);
+
+            registerRequest.DiFrontalImage = uploadResult.PublicUrl!;
+        }
+
+        if (registerRequest.DiBackImageFile != null)
+        {
+            var uploadResult = await _imageStorage.UploadImageBytesAsync(registerRequest.DiBackImageFile, "UserPhoto");
+
+            if (!uploadResult.IsSuccess)
+                return TypedResults.BadRequest(uploadResult.ErrorMessage);
+
+            registerRequest.DiBackImage = uploadResult.PublicUrl!;
+        }
+
+        var user = await userService.RegisterCustomerUserByBiAsync(registerRequest);
+        var createdUserId = user.GetType().GetProperty("Id")?.GetValue(user)?.ToString();
+
+        //await _minorGuardianService.CreateInvitationAsync(
+        //    createdUserId,
+        //    new CreateGuardianInvitationRequest
+        //    {
+        //        GuardianPhoneNumber = registerRequest.LegalRepresentativePhoneNumber,
+        //        GuardianName = registerRequest.LegalRepresentativeName,
+        //        RelationshipType = registerRequest.LegalRepresentativeType
+        //    });
+
+        return TypedResults.Ok(user);
+    }
+    catch (Exception ex)
+    {
+        return TypedResults.BadRequest(new { message = ex.Message });
+    }
+}
+
 static async Task<IResult> GetAllTodos(AppDbContext db)
 {
     return TypedResults.Ok(await db.Todos.ToArrayAsync());
-}
-
-static async Task<IResult> GetCompleteTodos(AppDbContext db)
-{
-    return TypedResults.Ok(await db.Todos.Where(t => t.IsComplete).ToListAsync());
-}
-
-static async Task<IResult> GetTodo(int id, AppDbContext db)
-{
-    return await db.Todos.FindAsync(id)
-        is Todo todo
-            ? TypedResults.Ok(todo)
-            : TypedResults.NotFound();
-}
-
-static async Task<IResult> CreateTodo(Todo todo, AppDbContext db)
-{
-    db.Todos.Add(todo);
-    await db.SaveChangesAsync();
-
-    return TypedResults.Created($"/todoitems/{todo.Id}", todo);
-}
-
-static async Task<IResult> UpdateTodo(int id, Todo inputTodo, AppDbContext db)
-{
-    var todo = await db.Todos.FindAsync(id);
-
-    if (todo is null) return TypedResults.NotFound();
-
-    todo.Name = inputTodo.Name;
-    todo.IsComplete = inputTodo.IsComplete;
-
-    await db.SaveChangesAsync();
-
-    return TypedResults.NoContent();
-}
-
-static async Task<IResult> DeleteTodo(int id, AppDbContext db)
-{
-    if (await db.Todos.FindAsync(id) is Todo todo)
-    {
-        db.Todos.Remove(todo);
-        await db.SaveChangesAsync();
-        return TypedResults.NoContent();
-    }
-
-    return TypedResults.NotFound();
 }

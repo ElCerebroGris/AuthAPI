@@ -158,6 +158,8 @@ namespace AuthAPI.Entities
         public string? LegalRepresentativeName { get; set; }
         public string? LegalRepresentativePhoneNumber { get; set; }
         public string? AddressNumber { get; set; }
+        public int Number { get; internal set; }
+        public string? ResidenceProvince { get; internal set; }
     }
 
     public class MongoDate

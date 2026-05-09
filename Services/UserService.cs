@@ -18,6 +18,10 @@ namespace AuthAPI.Services
         Task<RegisterCustomerUserResponse> RegisterCustomerUserAsync(RegisterCustomerUserRequest dto);
 
         Task<RegisterCustomerUserResponse> LoginCustomerUserAsync(string phoneNumber, string password);
+
+        Task<RegisterCustomerUserResponse> LoginCustomerUserByBiAsync(string biNumber, string password);
+
+        Task<object> RegisterCustomerUserByBiAsync(RegisterCustomerByBIRequest dto);
     }
 
     public class UserService : IUserService
@@ -217,6 +221,148 @@ namespace AuthAPI.Services
                 Experies_in = 3600,
                 IsActive = customerUser.IsActive
             };
+        }
+
+        public async Task<RegisterCustomerUserResponse> LoginCustomerUserByBiAsync(string biNumber, string password)
+        {
+            if (string.IsNullOrWhiteSpace(biNumber))
+                throw new UnauthorizedAccessException("Credenciais inválidas");
+
+            var normalizedBi = biNumber.Trim();
+
+            var customer = await _context.Customers
+                .FirstOrDefaultAsync(c => !string.IsNullOrEmpty(c.IdentificationNumber) &&
+                    c.IdentificationNumber.Trim().ToLower() == normalizedBi.ToLower());
+
+            if (customer == null || string.IsNullOrWhiteSpace(customer.UserId))
+                throw new UnauthorizedAccessException("Credenciais inválidas");
+
+            var customerUser = await _userManager.Users
+                .FirstOrDefaultAsync(u => u.Id == customer.UserId);
+
+            if (customerUser == null)
+                throw new UnauthorizedAccessException("Credenciais inválidas");
+
+            if (!await _userManager.IsInRoleAsync(customerUser, "Customer"))
+                throw new UnauthorizedAccessException("Credenciais inválidas");
+
+            var isPasswordValid = await _userManager.CheckPasswordAsync(customerUser, password);
+
+            if (!isPasswordValid)
+                throw new UnauthorizedAccessException("Credenciais inválidas");
+
+            if (!customerUser.IsActive)
+            {
+                customerUser.IsActive = true;
+                _context.Users.Update(customerUser);
+
+                customer.IsActive = true;
+                _context.Customers.Update(customer);
+
+                await _context.SaveChangesAsync();
+            }
+
+            return new RegisterCustomerUserResponse
+            {
+                Id = customerUser.Id,
+                Order = customerUser.Order,
+                IUF = customerUser.IUF,
+                BotpressKey = customerUser.BotpressKey,
+                Token = GenerateJwtToken(customerUser),
+                Experies_in = 3600,
+                IsActive = customerUser.IsActive
+            };
+        }
+
+        public async Task<object> RegisterCustomerUserByBiAsync(RegisterCustomerByBIRequest dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.DiNumber))
+                throw new InvalidOperationException("Documento de identificação inválido.");
+
+            if (await CustomerExistsAsync(dto.DiNumber))
+                throw new InvalidOperationException("Documento de identificação inválido.");
+
+            dto.PhoneNumber = null;
+            dto.Email = null;
+
+            var lastOrder = await _context.Customers
+                .Join(_context.Users,
+                    c => c.UserId, u => u.Id,
+                    (c, u) => (int?)u.Order)
+                .MaxAsync() ?? 0;
+
+            var newUser = new User
+            {
+                Order = lastOrder + 1,
+                UserName = Guid.NewGuid().ToString(),
+                PhoneNumber = null,
+                Email = null,
+                IUF = GenerateSimpleIUF("1", "0", dto.DiNumber, dto.FirstName, dto.BirthDate.Year),
+                IsActive = true
+            };
+
+            var result = await _userManager.CreateAsync(newUser, dto.Password);
+
+            if (!result.Succeeded)
+                throw new InvalidOperationException("Erro na criação da conta: " + string.Join(", ", result.Errors.Select(e => e.Description)));
+
+            await _userManager.AddToRoleAsync(newUser, "Customer");
+
+            var age = DateTime.Today.Year - dto.BirthDate.Year;
+            if (dto.BirthDate.Date > DateTime.Today.AddYears(-age)) age--;
+
+            var isMinor = age < 18;
+
+            var lastCustomerNumber = await _context.Customers
+                .MaxAsync(c => (int?)c.Number) ?? 0;
+
+            var customer = new Customer
+            {
+                UserId = newUser.Id,
+                Number = lastCustomerNumber + 1,
+                FirstName = dto.FirstName,
+                SurName = dto.LastName,
+                Email = null,
+                PhoneNumber = null,
+                Nationality = dto.Nationality,
+                Dob = dto.BirthDate.ToString("yyyy-MM-dd"),
+                Gender = dto.Gender,
+                MaritalStatus = dto.MaritalStatus,
+                IdentificationType = dto.DiType,
+                IdentificationNumber = dto.DiNumber,
+                IdentificationEmissionCountry = dto.DiEmissionCountry,
+                IdentificationExpiryDate = dto.DiExpiryDate.ToString("yyyy-MM-dd"),
+                IdentificationEmissionDate = dto.DiEmitionDate?.ToString("yyyy-MM-dd"),
+                DiFrontalImage = dto.DiFrontalImage,
+                DiBackImage = dto.DiBackImage,
+                Province = dto.Province,
+                Municipio = dto.Municipio,
+                Country = dto.Country,
+                ResidenceProvince = dto.ResidenceProvince,
+                BillingAddress = dto.Address,
+                ShippingAddress = dto.Address,
+                BayqiTag = dto.BayqiTag,
+                Pin = dto.Pin,
+                WalletBalance = 0,
+                Profile = dto.Profile,
+                IsActive = true,
+
+                FathersName = isMinor ? dto.FathersName : null,
+                MothersName = isMinor ? dto.MothersName : null,
+                LegalRepresentativeType = isMinor ? dto.LegalRepresentativeType : null,
+                LegalRepresentativeName = isMinor ? dto.LegalRepresentativeName : null,
+                LegalRepresentativePhoneNumber = isMinor ? dto.LegalRepresentativePhoneNumber : null,
+                MongoCreatedAt = DateTime.UtcNow.AddHours(1).ToString("yyyy-MM-ddTHH:mm:ss"),
+                IsDocumentAccount = true
+            };
+
+            _context.Customers.Add(customer);
+            await _context.SaveChangesAsync();
+
+            await GenerateReferencePaymentAsync(newUser.IUF!);
+
+            // Registo por BI não dispara comunicação automática.
+            return await LoginCustomerUserByBiAsync(dto.DiNumber, dto.Password);
         }
 
         private async Task<bool> CustomerExistsAsync(string documentID)
